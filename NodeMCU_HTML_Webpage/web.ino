@@ -4,7 +4,7 @@
 const char* ssid = ".";
 const char* password = "987654321";
 
-// GPIO pins (change if needed)
+// GPIO pins
 #define light1 D1
 #define light2 D2
 #define fan    D5
@@ -12,125 +12,163 @@ const char* password = "987654321";
 
 ESP8266WebServer server(80);
 
+// ---------------- STATUS ----------------
+bool light1State = false;
+bool light2State = false;
+bool fanState = false;
+bool plugState = false;
+
+// ---------------- NETWORK ----------------
 IPAddress local_IP(192,168,10,1);
 IPAddress gateway(192,168,10,1);
 IPAddress subnet(255,255,255,0);
 
-// ---------------- DEVICE HANDLERS ----------------
-void onDevice(int pin, const char* name) {
+// ---------------- DEVICE CONTROL ----------------
+void onDevice(int pin, const char* name, bool &state) {
   Serial.printf("%s ON\n", name);
   digitalWrite(pin, HIGH);
+  state = true;
+
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "");
 }
 
-void offDevice(int pin, const char* name) {
+void offDevice(int pin, const char* name, bool &state) {
   Serial.printf("%s OFF\n", name);
   digitalWrite(pin, LOW);
+  state = false;
+
   server.sendHeader("Location", "/");
   server.send(302, "text/plain", "");
 }
 
-// Light 1
-void l1on()  { onDevice(light1, "Light1"); }
-void l1off() { offDevice(light1, "Light1"); }
+// ---------------- ROUTES ----------------
+void l1on()  { onDevice(light1, "Light1", light1State); }
+void l1off() { offDevice(light1, "Light1", light1State); }
 
-// Light 2
-void l2on()  { onDevice(light2, "Light2"); }
-void l2off() { offDevice(light2, "Light2"); }
+void l2on()  { onDevice(light2, "Light2", light2State); }
+void l2off() { offDevice(light2, "Light2", light2State); }
 
-// Fan
-void fon()   { onDevice(fan, "Fan"); }
-void foff()  { offDevice(fan, "Fan"); }
+void fon()   { onDevice(fan, "Fan", fanState); }
+void foff()  { offDevice(fan, "Fan", fanState); }
 
-// Plug
-void pon()   { onDevice(plug, "Plug"); }
-void poff()  { offDevice(plug, "Plug"); }
+void pon()   { onDevice(plug, "Plug", plugState); }
+void poff()  { offDevice(plug, "Plug", plugState); }
 
-// ---------------- HTML PAGE ----------------
+// ---------------- STATUS API ----------------
+void handleStatus() {
+  String json = "{";
+  json += "\"light1\":" + String(light1State) + ",";
+  json += "\"light2\":" + String(light2State) + ",";
+  json += "\"fan\":" + String(fanState) + ",";
+  json += "\"plug\":" + String(plugState);
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+// ---------------- HTML ----------------
 void handleRoot() {
 
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Smart Home</title>
+  <title>Smart Home Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <style>
     body {
+      margin: 0;
       font-family: Arial;
+      background: linear-gradient(135deg, #1e3c72, #2a5298);
+      color: white;
       text-align: center;
-      background: #eef2f3;
     }
 
-    h1 {
-      margin-top: 20px;
-    }
+    h1 { margin: 20px 0; }
 
     .card {
       background: white;
+      color: black;
       width: 320px;
       margin: 15px auto;
       padding: 15px;
-      border-radius: 15px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      border-radius: 20px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
     }
 
-    .title {
-      font-size: 18px;
-      margin-bottom: 10px;
-      font-weight: bold;
-    }
+    .title { font-weight: bold; margin-bottom: 10px; }
 
     .btn {
       display: inline-block;
       width: 120px;
       padding: 10px;
       margin: 5px;
-      border-radius: 10px;
+      border-radius: 30px;
       text-decoration: none;
       color: white;
       font-weight: bold;
     }
 
-    .on { background: #28a745; }
-    .off { background: #dc3545; }
+    .on { background: #00c853; }
+    .off { background: #d50000; }
+
+    .dot {
+      height: 10px;
+      width: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 5px;
+    }
   </style>
 </head>
 
 <body>
 
-<h1>-- Smart Home Control --</h1>
+<h1>Smart Home Dashboard</h1>
 
-<!-- Light 1 -->
 <div class="card">
-  <div class="title"> Light 1</div>
+  <div class="title">Light 1</div>
   <a href="/l1on" class="btn on">ON</a>
   <a href="/l1off" class="btn off">OFF</a>
 </div>
 
-<!-- Light 2 -->
 <div class="card">
-  <div class="title"> Light 2</div>
+  <div class="title">Light 2</div>
   <a href="/l2on" class="btn on">ON</a>
   <a href="/l2off" class="btn off">OFF</a>
 </div>
 
-
-<!-- Fan -->
 <div class="card">
-  <div class="title"> Fan</div>
+  <div class="title">Fan</div>
   <a href="/fon" class="btn on">ON</a>
   <a href="/foff" class="btn off">OFF</a>
 </div>
 
-<!-- Plug -->
 <div class="card">
-  <div class="title"> Plug Board</div>
+  <div class="title">Plug</div>
   <a href="/pon" class="btn on">ON</a>
   <a href="/poff" class="btn off">OFF</a>
 </div>
+
+<div class="card">
+  <div class="title">Live Status</div>
+  <div id="statusBox">Loading...</div>
+</div>
+
+<script>
+setInterval(async () => {
+  const res = await fetch('/status');
+  const d = await res.json();
+
+  document.getElementById("statusBox").innerHTML =
+    "<span class='dot' style='background:" + (d.light1 ? "green" : "red") + "'></span> Light1: " + (d.light1 ? "ON" : "OFF") + "<br>" +
+    "<span class='dot' style='background:" + (d.light2 ? "green" : "red") + "'></span> Light2: " + (d.light2 ? "ON" : "OFF") + "<br>" +
+    "<span class='dot' style='background:" + (d.fan ? "green" : "red") + "'></span> Fan: " + (d.fan ? "ON" : "OFF") + "<br>" +
+    "<span class='dot' style='background:" + (d.plug ? "green" : "red") + "'></span> Plug: " + (d.plug ? "ON" : "OFF");
+}, 1000);
+</script>
 
 </body>
 </html>
@@ -156,21 +194,14 @@ void setup() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.begin(ssid, password);
 
-  Serial.print("Connecting");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
 
-  Serial.println("\nConnected");
-  Serial.println(WiFi.localIP());
-
   WiFi.softAPConfig(local_IP, gateway, subnet);
   WiFi.softAP("Home-automation", "123456789");
 
-  Serial.println(WiFi.softAPIP());
-
-  // Routes
   server.on("/", handleRoot);
 
   server.on("/l1on", l1on);
@@ -185,8 +216,9 @@ void setup() {
   server.on("/pon", pon);
   server.on("/poff", poff);
 
+  server.on("/status", handleStatus);
+
   server.begin();
-  Serial.println("HTTP Server Started");
 }
 
 // ---------------- LOOP ----------------
